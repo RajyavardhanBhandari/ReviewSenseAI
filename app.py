@@ -1,118 +1,139 @@
-from flask import Flask, request, render_template, jsonify
-from flask_cors import CORS  # Enable CORS for frontend
+from flask import Flask, request, jsonify, render_template
+from werkzeug.utils import secure_filename
 import os
-import time
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-from google.oauth2 import service_account
-from googleapiclient.errors import HttpError
-from datetime import datetime
+import subprocess
+import json
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for JavaScript frontend
 
-# Set up paths
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
-TEXT_REVIEWS_FILE = os.path.join(UPLOAD_FOLDER, "text_reviews.txt")
+# Configuration
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'mp4', 'webm', 'avi', 'mov'}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32 MB limit (increased for video)
 
-# Ensure upload folder exists
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+# Ensure uploads folder exists
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+# Helper function to validate file extension
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Google Drive API Configuration
-CREDENTIALS_PATH = "F:/Major 2/ReviewSenseAI/credentials.json"
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
-FOLDER_ID = "1YWgh_Tad2KHbxtGN4_hJdl3YvTMFsTYs"
+# Route to handle file uploads (video)
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    print("Upload endpoint called")
+    print("Form data:", request.form)
+    print("Files:", request.files)
+    
+    if 'file' not in request.files:
+        print("No file part in request")
+        return jsonify({'error': '❌ No file part in the request'}), 400
 
-# Verify credentials file exists
-if not os.path.exists(CREDENTIALS_PATH):
-    raise FileNotFoundError(f"❌ Error: Credentials file not found at {CREDENTIALS_PATH}")
+    file = request.files['file']
+    print(f"Received file: {file.filename}")
 
-creds = service_account.Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
-drive_service = build('drive', 'v3', credentials=creds)
+    if file.filename == '':
+        print("Empty filename")
+        return jsonify({'error': '❌ No file selected'}), 400
 
-def upload_to_drive(file_path, file_name, folder_id=FOLDER_ID):
-    """Uploads a file to Google Drive with a retry mechanism."""
-    if not os.path.exists(file_path):
-        print(f"❌ Error: File '{file_path}' not found.")
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+        # Debugging: Check if the file is being processed
+        print(f"Saving file to: {save_path}")
+
+        try:
+            file.save(save_path)
+            print(f"File saved successfully to {save_path}")
+            
+            # Optional: Convert to MP4 if it's a WebM file
+            if filename.endswith('.webm'):
+                print("Converting WebM to MP4")
+                mp4_path = convert_to_mp4(save_path)
+                if mp4_path:
+                    print(f"Conversion successful: {mp4_path}")
+                    return jsonify({
+                        'success': True,
+                        'message': f'✅ File uploaded and converted to MP4: {mp4_path}'
+                    }), 200
+                else:
+                    print("Conversion failed")
+                    return jsonify({
+                        'success': False,
+                        'error': '❌ Error during conversion'
+                    }), 500
+            
+            return jsonify({
+                'success': True,
+                'message': f'✅ File {filename} uploaded successfully!'
+            }), 200
+        except Exception as e:
+            print(f"❌ Error saving file: {e}")
+            return jsonify({
+                'success': False,
+                'error': f'❌ Error saving file: {e}'
+            }), 500
+    else:
+        print(f"Invalid file type: {file.filename}")
+        return jsonify({
+            'success': False,
+            'error': '❌ Invalid file type'
+        }), 400
+
+# Route to handle text reviews
+@app.route('/text-review', methods=['POST'])
+def text_review():
+    print("Text review endpoint called")
+    try:
+        review_text = request.form.get('text_review', '')
+        if not review_text:
+            return jsonify({
+                'success': False,
+                'error': '❌ No text review provided'
+            }), 400
+            
+        # Save the text review to a file
+        review_filename = f"review_{int(time.time())}.txt"
+        review_path = os.path.join(app.config['UPLOAD_FOLDER'], review_filename)
+        
+        with open(review_path, 'w') as f:
+            f.write(review_text)
+            
+        return jsonify({
+            'success': True,
+            'message': '✅ Text review saved successfully!'
+        }), 200
+    except Exception as e:
+        print(f"❌ Error saving text review: {e}")
+        return jsonify({
+            'success': False,
+            'error': f'❌ Error saving text review: {e}'
+        }), 500
+
+def convert_to_mp4(webm_path):
+    mp4_path = webm_path.replace('.webm', '.mp4')
+
+    # Call ffmpeg to convert
+    try:
+        result = subprocess.run(
+            ['ffmpeg', '-i', webm_path, mp4_path], 
+            check=True, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE
+        )
+        print(result.stdout.decode())  # Log stdout from ffmpeg
+        print(result.stderr.decode())  # Log stderr from ffmpeg
+        return mp4_path
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Conversion failed: {e.stderr.decode()}")
         return None
 
-    file_metadata = {'name': file_name, 'parents': [folder_id]}
-    media = MediaFileUpload(file_path, resumable=True)
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-    for attempt in range(3):  # Retry up to 3 times
-        try:
-            uploaded_file = drive_service.files().create(
-                body=file_metadata, media_body=media, fields='id'
-            ).execute()
-            print(f"✅ File uploaded successfully! File ID: {uploaded_file.get('id')}")
-            return uploaded_file.get('id')
-        except HttpError as error:
-            print(f"⚠️ Upload failed, attempt {attempt + 1}: {error}")
-            time.sleep(2)  # Wait before retrying
-    return None  # Return None after 3 failed attempts
-
-@app.route("/")
-def home():
-    return render_template("index.html")
-
-@app.route("/favicon.ico")
-def favicon():
-    return '', 204  # Prevent 404 error for favicon
-
-@app.route("/upload", methods=["POST"])
-def upload_video():
-    print("📌 Received a request to /upload")  # Debugging print
-
-    if "file" not in request.files or request.files["file"].filename == "":
-        return jsonify({"error": "No file selected"}), 400
-
-    file = request.files["file"]
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_name = f"video_{timestamp}.mp4"
-    file_path = os.path.join(app.config["UPLOAD_FOLDER"], file_name)
-
-    print(f"📂 Saving file to: {file_path}")
-
-    try:
-        file.save(file_path)
-        print("✅ File saved successfully!")
-
-        # Upload to Google Drive
-        drive_file_id = upload_to_drive(file_path, file_name)
-
-        if drive_file_id:
-            return jsonify({"message": "Video uploaded successfully!", "drive_file_id": drive_file_id}), 200
-        else:
-            return jsonify({"error": "Failed to upload to Google Drive"}), 500
-    except Exception as e:
-        print(f"❌ Error saving file: {e}")
-        return jsonify({"error": f"File save error: {e}"}), 500
-
-@app.route("/submit_review", methods=["POST"])
-def submit_review():
-    review = request.form.get("text_review", "").strip()
-
-    if not review:
-        return jsonify({"error": "Empty review cannot be submitted"}), 400
-
-    try:
-        with open(TEXT_REVIEWS_FILE, "a", encoding="utf-8") as f:
-            f.write(review + "\n")
-        print("✅ Review saved successfully!")
-    except Exception as e:
-        print(f"❌ Error saving review: {e}")
-        return jsonify({"error": "Error saving review"}), 500
-
-    drive_file_id = upload_to_drive(TEXT_REVIEWS_FILE, "text_reviews.txt")
-
-    if drive_file_id:
-        return jsonify({"message": "Review submitted successfully!", "drive_file_id": drive_file_id}), 200
-    else:
-        return jsonify({"error": "Failed to upload review to Google Drive"}), 500
-
-if __name__ == "__main__":
-    app.run(debug=True, port=5000)  # Ensure Flask runs on port 5000
+if __name__ == '__main__':
+    import time  # Add this import at the top
+    app.run(debug=True)

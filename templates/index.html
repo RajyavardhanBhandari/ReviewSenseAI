@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ReviewSenseAI</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <style>
+        body {
+            background-color: #E3F2FD; /* Sky Blue Background */
+            color: #01579B; /* Dark Blue Text */
+            font-family: 'Arial', sans-serif;
+        }
+        .container {
+            max-width: 900px;
+        }
+        .card {
+            background-color: #ffffff;
+            border: 2px solid #01579B;
+            border-radius: 15px;
+            box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.1);
+        }
+        .btn-primary {
+            background-color: #0288D1;
+            border: none;
+            width: 100%;
+            padding: 10px;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            transition: 0.3s;
+        }
+        .btn-primary:hover {
+            background-color: #0277BD;
+        }
+        h1 {
+            text-align: center;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+        .upload-section, .record-section, .text-review-section {
+            padding: 20px;
+        }
+        .record-section video {
+            width: 100%;
+            border-radius: 10px;
+            border: 2px solid #0288D1;
+        }
+        .btn-danger {
+            background-color: #D32F2F;
+            border: none;
+        }
+        .btn-danger:hover {
+            background-color: #B71C1C;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            border: 2px solid #0288D1;
+            border-radius: 10px;
+            padding: 10px;
+            resize: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <h1>ReviewSenseAI</h1>
+        <div class="card p-4">
+            <div class="row">
+                <!-- Left: Upload Section -->
+                <div class="col-md-6 upload-section">
+                    <h2 class="text-center">Upload Video</h2>
+                    <form id="uploadForm" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <input type="file" name="file" class="form-control" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Upload & Analyze</button>
+                    </form>
+                </div>
+
+                <!-- Right: Recording Section -->
+                <div class="col-md-6 record-section text-center">
+                    <h2 class="text-center">Record Video</h2>
+                    <video id="preview" autoplay muted></video>
+                    <button id="recordButton" class="btn btn-primary mt-2">Start Recording</button>
+                    <p id="loading" class="mt-2 text-danger" style="display: none;">Uploading... Please wait.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Text Review Section -->
+        <div class="card p-4 mt-4 text-review-section">
+            <h2 class="text-center">Add Text Review</h2>
+            <form id="textReviewForm">
+                <textarea name="text_review" placeholder="Write your review here..." required></textarea>
+                <button type="submit" class="btn btn-primary mt-2">Submit Review</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        console.log("✅ JavaScript Loaded Successfully!");
+    
+        // ==============================
+        // ✅ Video Recording Logic
+        // ==============================
+        let mediaRecorder;
+        let recordedChunks = [];
+        let isRecording = false;
+    
+        document.getElementById("recordButton").addEventListener("click", async function () {
+            const button = document.getElementById("recordButton");
+    
+            if (!isRecording) {
+                console.log("📌 Starting recording...");
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                document.getElementById("preview").srcObject = stream;
+    
+                mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm" });
+                recordedChunks = [];
+    
+                mediaRecorder.ondataavailable = (event) => recordedChunks.push(event.data);
+                mediaRecorder.onstop = async () => {
+                    console.log("📌 Recording stopped. Preparing to upload...");
+    
+                    const webmBlob = new Blob(recordedChunks, { type: "video/webm" });
+    
+                    // Create FormData for upload
+                    const formData = new FormData();
+                    formData.append("file", webmBlob, "recorded-video.webm");
+    
+                    document.getElementById("loading").style.display = "block";
+    
+                    fetch("/upload", {
+                        method: "POST",
+                        body: formData
+                    })
+                        .then(response => response.text())
+                        .then(data => {
+                            document.getElementById("loading").style.display = "none";
+                            console.log("✅ Video uploaded successfully!");
+                            alert("✅ Video uploaded successfully!");
+                        })
+                        .catch(error => {
+                            document.getElementById("loading").style.display = "none";
+                            console.error("❌ Upload failed:", error);
+                            alert("❌ Upload failed: " + error);
+                        });
+                };
+    
+                mediaRecorder.start();
+                button.textContent = "Stop Recording";
+                button.classList.replace("btn-primary", "btn-danger");
+                isRecording = true;
+            } else {
+                mediaRecorder.stop();
+                button.textContent = "Start Recording";
+                button.classList.replace("btn-danger", "btn-primary");
+                isRecording = false;
+            }
+        });
+    
+        // ==============================
+        // ✅ File Upload Logic (Independent)
+        // ==============================
+        document.getElementById("uploadForm").addEventListener("submit", function (event) {
+            event.preventDefault();
+            console.log("📌 Upload form submitted!");
+    
+            let formData = new FormData(this);
+            fetch("/upload", {
+                method: "POST",
+                body: formData
+            })
+                .then(response => response.text())
+                .then(data => {
+                    console.log("✅ Upload successful:", data);
+                    alert("✅ Video uploaded successfully!");
+                })
+                .catch(error => {
+                    console.error("❌ Upload failed:", error);
+                    alert("❌ Upload failed: " + error);
+                });
+        });
+    
+        // ==============================
+        // ✅ Text Review Submission (Independent)
+        // ==============================
+        document.getElementById("textReviewForm").addEventListener("submit", function (event) {
+            event.preventDefault();
+            console.log("📌 Text review form submitted!");
+    
+            let formData = new FormData(this);
+            fetch("/upload", {
+                method: "POST",
+                body: formData
+            })
+                .then(response => response.text())
+                .then(data => {
+                    console.log("✅ Review submitted successfully:", data);
+                    alert("✅ Review submitted successfully!");
+                })
+                .catch(error => {
+                    console.error("❌ Submission failed:", error);
+                    alert("❌ Submission failed: " + error);
+                });
+        });
+    
+    </script>
+</body>
+</html>
